@@ -65,51 +65,9 @@ function httpGet(url, redirects = 0) {
   });
 }
 
-function httpPost(url, body) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const req = https.request({
-      hostname: u.hostname,
-      path: u.pathname + u.search,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-      },
-    }, (res) => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', chunk => { data += chunk; });
-      res.on('end', () => resolve(data));
-    });
-    req.setTimeout(15000, () => { req.destroy(); reject(new Error('timeout')); });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
-}
 
-async function classifySector(title, company, description) {
-  if (!GEMINI_KEY) return inferSector(title + ' ' + description);
-  try {
-    const body = JSON.stringify({
-      contents: [{ parts: [{ text:
-        'You are classifying a Pakistani job posting. Reply with exactly one word only: Government, Private, or NGO.\n' +
-        `Title: ${title}\nCompany: ${(company || '').slice(0, 100)}\nDescription: ${(description || '').slice(0, 250)}`
-      }] }],
-      generationConfig: { maxOutputTokens: 10 },
-    });
-    const raw = await httpPost(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
-      body,
-    );
-    const parsed = JSON.parse(raw);
-    const text = (parsed?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-    return ['Government', 'Private', 'NGO'].includes(text) ? text : inferSector(title);
-  } catch (e) {
-    console.warn('Gemini error:', e.message);
-    return inferSector(title + ' ' + description);
-  }
+function classifySector(title, company, description) {
+  return inferSector(`${title} ${company || ''} ${description || ''}`);
 }
 
 // Regex-based RSS parser — avoids cheerio <link> bug
