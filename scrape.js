@@ -138,16 +138,20 @@ async function main() {
   const newJobs = await scrapeRssFeeds(existingIds);
   console.log(`New jobs found: ${newJobs.length}`);
 
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30 days
   const seen = new Set();
   const merged = [...newJobs, ...existing].filter(j => {
     if (!j || !j.id) return false;
     if (seen.has(j.id)) return false;
+    // Remove jobs older than 30 days
+    const t = new Date(j.createdAt || j.pubDate || 0).getTime();
+    if (Number.isFinite(t) && t < cutoff) return false;
     seen.add(j.id);
     return true;
   }).slice(0, MAX_JOBS);
 
   fs.writeFileSync(JOBS_FILE, JSON.stringify(merged, null, 2));
-  console.log(`Saved ${merged.length} jobs to ${JOBS_FILE}`);
+  console.log(`Saved ${merged.length} jobs to ${JOBS_FILE} (30-day window)`);
 }
 
 main().catch(e => { console.error('Fatal:', e); process.exit(1); });
