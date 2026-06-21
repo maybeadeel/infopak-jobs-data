@@ -9,14 +9,18 @@ const JOBS_FILE = 'jobs.json';
 const MAX_JOBS = 500;
 const UA = 'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
 
+// { url, source, stripSuffix } — source overrides auto-detection
 const RSS_FEEDS = [
-  'https://news.google.com/rss/search?q=jobs+pakistan+vacancy+apply&hl=en-PK&gl=PK&ceid=PK:en',
-  'https://news.google.com/rss/search?q=government+jobs+pakistan+2025+advertisement&hl=en-PK&gl=PK&ceid=PK:en',
-  'https://news.google.com/rss/search?q=ngo+jobs+pakistan+apply+now&hl=en-PK&gl=PK&ceid=PK:en',
-  'https://news.google.com/rss/search?q=private+jobs+pakistan+karachi+lahore+2025&hl=en-PK&gl=PK&ceid=PK:en',
-  'https://news.google.com/rss/search?q=rozee+mustakbil+jobs+pakistan&hl=en-PK&gl=PK&ceid=PK:en',
-  'https://news.google.com/rss/search?q=pakistan+jobs+2025+latest+apply&hl=en-PK&gl=PK&ceid=PK:en',
-  'https://www.jobsalert.pk/feed/',
+  // Site-specific feeds (most accurate source attribution + clean job titles)
+  { url: 'https://news.google.com/rss/search?q=site:pakistanjobsbank.com&hl=en-PK&gl=PK&ceid=PK:en', source: 'pakistanjobsbank', strip: ' - Pakistan Jobs Bank' },
+  { url: 'https://news.google.com/rss/search?q=site:getpakjob.com&hl=en-PK&gl=PK&ceid=PK:en', source: 'getpakjob', strip: ' - GetPakJob' },
+  { url: 'https://news.google.com/rss/search?q=site:pakngos.com.pk&hl=en-PK&gl=PK&ceid=PK:en', source: 'pakngos', strip: ' - PakNGOs' },
+  // General Pakistan jobs RSS
+  { url: 'https://news.google.com/rss/search?q=jobs+pakistan+vacancy+apply&hl=en-PK&gl=PK&ceid=PK:en' },
+  { url: 'https://news.google.com/rss/search?q=government+jobs+pakistan+2026+advertisement&hl=en-PK&gl=PK&ceid=PK:en' },
+  { url: 'https://news.google.com/rss/search?q=ngo+jobs+pakistan+apply+now&hl=en-PK&gl=PK&ceid=PK:en' },
+  { url: 'https://news.google.com/rss/search?q=private+jobs+pakistan+karachi+lahore+2026&hl=en-PK&gl=PK&ceid=PK:en' },
+  { url: 'https://www.jobsalert.pk/feed/' },
 ];
 
 function loadExisting() {
@@ -96,13 +100,37 @@ function extractRssItems(xml) {
   return items;
 }
 
+function cleanTitle(title, strip) {
+  let t = title.replace(/&amp;/g,'&').replace(/&#39;/g,"'").replace(/&quot;/g,'"').trim();
+  if (strip && t.endsWith(strip)) t = t.slice(0, -strip.length).trim();
+  // Also remove trailing " - SiteName" pattern generically
+  t = t.replace(/\s+[-–]\s+(Pakistan Jobs Bank|GetPakJob|PakNGOs|JobsAlert)$/i, '').trim();
+  return t;
+}
+
+function buildDescription(title, rawDesc, source) {
+  // Google News descriptions for job sites are usually just title repeated — skip them
+  const desc = rawDesc.replace(/&nbsp;/g,' ').replace(/\s+/g,' ').trim();
+  const titleClean = title.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,30);
+  const descClean = desc.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,30);
+  if (!desc || desc.length < 20 || descClean.startsWith(titleClean)) {
+    // Generate a helpful description from title keywords
+    const year = new Date().getFullYear();
+    return `${title}. Apply online for this position in Pakistan. Check eligibility, qualifications and last date on the official website.`;
+  }
+  return desc.slice(0, 400);
+}
+
 async function scrapeRssFeeds(existingIds) {
   const jobs = [];
-  for (const url of RSS_FEEDS) {
+  for (const feed of RSS_FEEDS) {
+    const feedUrl = typeof feed === 'string' ? feed : feed.url;
+    const feedSource = typeof feed === 'object' ? feed.source : null;
+    const feedStrip = typeof feed === 'object' ? feed.strip : null;
     try {
-      const xml = await httpGet(url);
+      const xml = await httpGet(feedUrl);
       const items = extractRssItems(xml);
-      console.log(`RSS ${url.slice(0, 70)}: ${items.length} items`);
+      console.log(`RSS ${feedUrl.slice(0, 65)}: ${items.length} items`);
       for (const item of items.slice(0, 30)) {
         const slug = Buffer.from(item.link)
           .toString('base64')
@@ -110,21 +138,24 @@ async function scrapeRssFeeds(existingIds) {
           .slice(0, 80);
         const id = `rss_${slug}`;
         if (existingIds.has(id)) continue;
-        const sector = await classifySector(item.title, item.source, item.description);
+        const title = cleanTitle(item.title, feedStrip);
+        if (title.length < 5) continue;
+        const description = buildDescription(title, item.description, feedSource);
+        const sector = classifySector(title, item.source, description);
         jobs.push({
           id,
-          title: item.title,
+          title,
           link: item.link,
-          company: item.source,
-          description: item.description.slice(0, 300),
+          company: item.source || '',
+          description,
           sector,
-          source: 'rss',
+          source: feedSource || 'rss',
           pubDate: item.pubDate,
           createdAt: new Date().toISOString(),
         });
       }
     } catch (e) {
-      console.warn(`RSS error ${url.slice(0, 70)}:`, e.message);
+      console.warn(`RSS error ${feedUrl.slice(0, 65)}:`, e.message);
     }
   }
   return jobs;
